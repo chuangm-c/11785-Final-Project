@@ -9,13 +9,29 @@ Given EEG data recorded while a subject listened to audio, we train our model us
 Our results are promising for applications in brain-computer interaction, such as speech-impaired accessibility. 
 
 ## Datasets
- 
-We work with EEG data as it is non-invasive and inexpensive to record compared to other brain signal recording methods such as MEG or fMRI. We rely on data from Brennan and Hale: https://deepblue.lib.umich.edu/data/concern/data_sets/bn999738r
 
-This dataset contains EEG data collected using 62 sensors from 33 subjects, totaling approximately 6.7 hours of recordings. 
+We work with EEG data as it is non-invasive and inexpensive to record compared to other brain signal recording methods such as MEG or fMRI. We rely on data from Brennan and Hale. This dataset contains EEG data collected using 62 sensors from 33 subjects, totaling approximately 6.7 hours of recordings. 
 
-## Project directory 
+**Data Access**:
+  - Raw EEG and audio data: [DeepBlue Dataset](https://deepblue.lib.umich.edu/data/concern/data_sets/bn999738r)
+  - Audio embeddings (embedded with Wav2Vec): [Google Drive](https://drive.google.com/drive/folders/1EsF6CMh_pLmwle4Qu3QLRpSYnj63n1iH?usp=sharing)
 
-### fkfk
-### fkfk
+## Project Directory
+
+### `brainmagick_updated`
+Includes the original Meta's code and our modifications to the model architecture:
+- `common.py`
+- `simpleconv.py`
+
+### `pretrained-models`
+Contains the pre-trained model Wav2Vec used for audio embeddings.
+
+### `notebooks`
+A collection of Jupyter notebooks:
+- `mne-eeg-preprocessing.ipynb`
+- `baseline model_runner (submitted as mid-term).ipynb`
+- `complete-training-pipeline-eda.ipynb`
+- `experiments-1.ipynb`
+- `experiments-2.ipynb`
+- `metrics-plots.ipynb` 
 
