@@ -28,10 +28,11 @@ Contains the pre-trained model Wav2Vec used for audio embeddings.
 
 ### `notebooks`
 A collection of Jupyter notebooks:
-- `mne-eeg-preprocessing.ipynb`
-- `baseline model_runner (submitted as mid-term).ipynb`
-- `complete-training-pipeline-eda.ipynb`
-- `experiments-1.ipynb`
-- `experiments-2.ipynb`
-- `metrics-plots.ipynb` 
+- `mne-eeg-preprocessing.ipynb`: Includes preprocessing of raw EEG data.
+- `baseline model_runner (submitted as mid-term).ipynb`: Contains the runner used to obtain baseline results.
+- `complete-training-pipeline-eda.ipynb`: Features the custom pipeline to run experiments, as well as exploratory data analysis.
+- `experiments-1.ipynb`: Provides the runner for conducting ablations.
+- `experiments-2.ipynb`: Includes another runner for conducting ablations.
+- `metrics-plots.ipynb`: Displays plots with the results of ablations.
+
 
