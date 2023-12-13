@@ -18,11 +18,31 @@ from ..studies.api import Recording
 
 logger = logging.getLogger(__name__)
 
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, activation=nn.ReLU):
+        super().__init__()
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, stride, padding)
+        self.activation = activation()
+        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, stride, padding)
+        self.skip = nn.Sequential()
+        if in_channels != out_channels or stride != 1:
+            self.skip = nn.Conv1d(in_channels, out_channels, 1, stride)
+
+    def forward(self, x):
+        residual = self.skip(x)
+        out = self.conv1(x)
+        out = self.activation(out)
+        out = self.conv2(out)
+        out += residual
+        out = self.activation(out)
+        return out
+
 
 def pad_multiple(x: torch.Tensor, base: int):
     length = x.shape[-1]
     target = math.ceil(length / base) * base
     return torch.nn.functional.pad(x, (0, target - length))
+    
 
 
 class ScaledEmbedding(nn.Module):
@@ -60,6 +80,56 @@ class SubjectLayers(nn.Module):
     def __repr__(self):
         S, C, D = self.weights.shape
         return f"SubjectLayers({C}, {D}, {S})"
+
+        
+class SubjectAttention(nn.Module):
+    """Attention mechanism for SubjectLayers."""
+    def __init__(self, in_channels: int, n_subjects: int):
+        super().__init__()
+        self.query = nn.Linear(in_channels, in_channels)
+        self.key = nn.Linear(in_channels, in_channels)
+        self.value = nn.Parameter(torch.randn(n_subjects, in_channels, in_channels))
+
+    def forward(self, x, subjects):
+        # Query and key transformations
+        query = self.query(x).mean(dim=-1, keepdim=True)  # Mean over time dimension
+        key = self.key(x).mean(dim=-1, keepdim=True)
+        
+        # Attention scores
+        attn_scores = torch.matmul(query.transpose(-2, -1), key)
+        attn_weights = F.softmax(attn_scores, dim=-1)
+        
+        # Gather subject specific values and apply attention
+        _, C, D = self.value.shape
+        value = self.value.gather(0, subjects.view(-1, 1, 1).expand(-1, C, D))
+        attended_value = torch.matmul(attn_weights, value)
+        return attended_value
+
+#module of our own
+class SubjectAttentionLayers(nn.Module):
+    """Per subject linear layer with attention."""
+    def __init__(self, in_channels: int, out_channels: int, n_subjects: int, init_id: bool = False):
+        super().__init__()
+        self.attention = SubjectAttention(in_channels, n_subjects)
+        self.weights = nn.Parameter(torch.randn(n_subjects, in_channels, out_channels))
+        if init_id:
+            assert in_channels == out_channels
+            self.weights.data[:] = torch.eye(in_channels)[None]
+        self.weights.data *= 1 / in_channels**0.5
+
+    def forward(self, x, subjects):
+        # Apply attention
+        attended_weights = self.attention(x, subjects)
+
+        # Apply subject-specific weights
+        _, C, D = self.weights.shape
+        weights = self.weights.gather(0, subjects.view(-1, 1, 1).expand(-1, C, D))
+        attended_weights = attended_weights * weights
+        return torch.einsum("bct,bcd->bdt", x, attended_weights)
+
+    def __repr__(self):
+        S, C, D = self.weights.shape
+        return f"SubjectLayers({C}, {D}, {S}, with attention)"
 
 
 class LayerScale(nn.Module):
@@ -175,6 +245,49 @@ class DualPathRNN(nn.Module):
                 y = y.reshape(-1, B, C)
             x = x + y
 
+            if idx % 2 == 1:
+                x = x.flip(dims=(0,))
+        return x[:L].permute(1, 2, 0).contiguous()
+ 
+
+class SelfAttention(nn.Module):
+    def __init__(self, attention_size):
+        super(SelfAttention, self).__init__()
+        self.attention_weights = nn.Parameter(torch.randn(attention_size))
+
+    def forward(self, inputs):
+        attention_scores = torch.matmul(inputs, self.attention_weights)
+        attention_weights = F.softmax(attention_scores, dim=1)
+        return torch.bmm(attention_weights.unsqueeze(1), inputs).squeeze(1)
+
+      
+
+class DualPathRNN_attention(nn.Module):
+    def __init__(self, channels: int, depth: int, inner_length: int = 10, attention_size: int = 128):
+        super().__init__()
+        self.lstms = nn.ModuleList([nn.LSTM(channels, channels // 2, 1, bidirectional=True) for _ in range(depth * 2)])
+        self.attention_layers = nn.ModuleList([SelfAttention(attention_size) for _ in range(depth * 2)])
+        self.inner_length = inner_length
+
+    def forward(self, x: torch.Tensor):
+        B, C, L = x.shape
+        IL = self.inner_length
+        x = F.pad(x, (0, IL - L % IL))
+        x = x.permute(2, 0, 1).contiguous()
+        
+        for idx, (lstm, attn) in enumerate(zip(self.lstms, self.attention_layers)):
+            y = x.reshape(-1, IL, B, C)
+            if idx % 2 == 0:
+                y = y.transpose(0, 1).reshape(IL, -1, C)
+            else:
+                y = y.reshape(-1, IL * B, C)
+            y, _ = lstm(y)
+            y = attn(y)
+            if idx % 2 == 0:
+                y = y.reshape(IL, -1, B, C).transpose(0, 1).reshape(-1, B, C)
+            else:
+                y = y.reshape(-1, B, C)
+            x = x + y
             if idx % 2 == 1:
                 x = x.flip(dims=(0,))
         return x[:L].permute(1, 2, 0).contiguous()
@@ -359,4 +472,42 @@ class ChannelMerger(nn.Module):
         if self.training and self.usage_penalty > 0.:
             usage = weights.mean(dim=(0, 1)).sum()
             self._penalty = self.usage_penalty * usage
+            
+        self.attention_scores = weights.detach().cpu()
         return out
+    def get_attention_scores(self):
+        # 确保已经有计算好的attention scores
+        if hasattr(self, 'attention_scores'):
+            return self.attention_scores
+        else:
+            raise ValueError("Attention scores have not been computed. Perform a forward pass first.")
+
+def plot_attention_2d(channel_merger, position_getter,file_name):
+    # 获取attention scores
+    attention_scores = channel_merger.get_attention_scores().mean(dim=0).mean(dim=0) 
+    
+    
+    positions = position_getter.get_positions(channel_merger.some_batch)  # 这里需要确保some_batch已被定义
+    positions = positions[0]  # 取第一个记录的位置
+    valid_mask = ~position_getter.is_invalid(positions)
+    valid_positions = positions[valid_mask]
+    valid_scores = attention_scores[valid_mask]
+    plt.figure(figsize=(8, 6))
+    sc = plt.scatter(valid_positions[:, 0], valid_positions[:, 1], c=valid_scores, cmap='viridis')
+    plt.colorbar(sc, label='Attention Score')
+    plt.xlabel('X Position')
+    plt.ylabel('Y Position')
+    plt.title('2D Attention Scores per Channel')
+    plt.savefig(file_name)
+    plt.show()
+    
+    '''
+    # 绘图
+    plt.figure(figsize=(12, 6))
+    plt.bar(channel_names, attention_scores)
+    plt.xlabel('Channel')
+    plt.ylabel('Attention Score')
+    plt.title('Attention Scores per Channel')
+    plt.savefig(file_name)
+    plt.show()
+    '''
